@@ -1,33 +1,38 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Icon from "@/components/ui/icon";
+import {
+  apiLogin, apiRegister, apiLogout, apiGetMe,
+  apiUpdateProfile, apiGetMyOrders, apiGetLoyalty, getToken
+} from "@/lib/api";
 
-type Tab = "login" | "register" | "dashboard";
-
-const mockUser = {
-  name: "Иван Петров",
-  email: "ivan@example.com",
-  phone: "+7 (999) 123-45-67",
-  bonusPoints: 1240,
-  level: "Серебряный",
-  nextLevel: "Золотой",
-  nextLevelPoints: 2000,
-  orders: [
-    { id: "SC-2024-001", device: "iPhone 15 Pro", service: "Замена экрана", date: "22.04.2024", status: "В ремонте", price: 4990 },
-    { id: "SC-2024-002", device: "MacBook Pro 14\"", service: "Замена клавиатуры", date: "20.04.2024", status: "Готово", price: 7990 },
-    { id: "SC-2023-089", device: "iPhone 13", service: "Замена аккумулятора", date: "15.11.2023", status: "Готово", price: 1490 },
-  ],
+const loyaltyLevelColors: Record<string, string> = {
+  base: "bg-gray-400",
+  silver: "bg-gray-300",
+  gold: "bg-yellow-400",
+  platinum: "bg-blue-400",
 };
 
-const loyaltyLevels = [
-  { name: "Базовый", points: 0, discount: 2, color: "bg-gray-400" },
-  { name: "Серебряный", points: 500, discount: 5, color: "bg-gray-300" },
-  { name: "Золотой", points: 2000, discount: 8, color: "bg-yellow-400" },
-  { name: "Платиновый", points: 5000, discount: 12, color: "bg-blue-400" },
-];
+type LoyaltyLevel = { name: string; label: string; minPoints: number; discount: number };
+type LoyaltyData = {
+  points: number;
+  level: LoyaltyLevel;
+  nextLevel: { label: string; minPoints: number } | null;
+  allLevels: LoyaltyLevel[];
+  progress: number;
+};
+type Order = { id: number; orderNumber: string; device: string; service: string; status: string; price: number; createdAt: string };
+type UserData = { id: number; name: string; email: string; phone: string };
 
 export default function Account() {
-  const [tab, setTab] = useState<Tab>("login");
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [tab, setTab] = useState<"login" | "register">("login");
+  const [activeTab, setActiveTab] = useState<"orders" | "loyalty" | "settings">("orders");
+
+  const [user, setUser] = useState<UserData | null>(null);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loyalty, setLoyalty] = useState<LoyaltyData | null>(null);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [regName, setRegName] = useState("");
@@ -35,27 +40,99 @@ export default function Account() {
   const [regPhone, setRegPhone] = useState("");
   const [regPassword, setRegPassword] = useState("");
   const [emailSent, setEmailSent] = useState(false);
-  const [activeTab, setActiveTab] = useState<"orders" | "loyalty" | "settings">("orders");
+  const [error, setError] = useState("");
+  const [formLoading, setFormLoading] = useState(false);
+  const [settingsName, setSettingsName] = useState("");
+  const [settingsPhone, setSettingsPhone] = useState("");
+  const [settingsSaved, setSettingsSaved] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (getToken()) {
+      loadUserData();
+    } else {
+      setPageLoading(false);
+    }
+  }, []);
+
+  async function loadUserData() {
+    try {
+      const [meData, ordersData, loyaltyData] = await Promise.all([
+        apiGetMe(), apiGetMyOrders(), apiGetLoyalty(),
+      ]);
+      setUser(meData.user);
+      setSettingsName(meData.user.name);
+      setSettingsPhone(meData.user.phone || "");
+      setOrders(ordersData.orders || []);
+      setLoyalty(loyaltyData);
+      setIsLoggedIn(true);
+    } catch {
+      setIsLoggedIn(false);
+    } finally {
+      setPageLoading(false);
+    }
+  }
+
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoggedIn(true);
+    setError("");
+    setFormLoading(true);
+    try {
+      const data = await apiLogin(email, password);
+      setUser(data.user);
+      setSettingsName(data.user.name);
+      setSettingsPhone(data.user.phone || "");
+      const [ordersData, loyaltyData] = await Promise.all([apiGetMyOrders(), apiGetLoyalty()]);
+      setOrders(ordersData.orders || []);
+      setLoyalty(loyaltyData);
+      setIsLoggedIn(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Ошибка входа");
+    } finally {
+      setFormLoading(false);
+    }
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    setEmailSent(true);
+    setError("");
+    setFormLoading(true);
+    try {
+      await apiRegister(regName, regEmail, regPassword, regPhone);
+      setEmailSent(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Ошибка регистрации");
+    } finally {
+      setFormLoading(false);
+    }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await apiLogout();
     setIsLoggedIn(false);
+    setUser(null);
+    setOrders([]);
+    setLoyalty(null);
     setTab("login");
-    setEmail("");
-    setPassword("");
+    setEmail(""); setPassword("");
   };
 
-  if (isLoggedIn) {
-    const progress = Math.min((mockUser.bonusPoints / mockUser.nextLevelPoints) * 100, 100);
+  const handleSaveProfile = async () => {
+    try {
+      await apiUpdateProfile(settingsName, settingsPhone);
+      setSettingsSaved(true);
+      setTimeout(() => setSettingsSaved(false), 3000);
+    } catch { /* ignore */ }
+  };
+
+  if (pageLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Icon name="Loader2" size={32} className="animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (isLoggedIn && user && loyalty) {
     return (
       <div className="min-h-screen bg-background">
         <section className="bg-primary py-16">
@@ -66,39 +143,29 @@ export default function Account() {
                   <Icon name="User" size={32} className="text-white" />
                 </div>
                 <div>
-                  <h1 className="text-2xl font-bold text-white">{mockUser.name}</h1>
-                  <p className="text-white/70 text-sm">{mockUser.email}</p>
+                  <h1 className="text-2xl font-bold text-white">{user.name}</h1>
+                  <p className="text-white/70 text-sm">{user.email}</p>
                 </div>
               </div>
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/20 transition-colors"
-              >
-                <Icon name="LogOut" size={16} />
-                Выйти
+              <button onClick={handleLogout}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/10 text-white text-sm hover:bg-white/20 transition-colors">
+                <Icon name="LogOut" size={16} />Выйти
               </button>
             </div>
           </div>
         </section>
 
         <section className="py-10 container mx-auto px-4 max-w-4xl">
-          <div className="flex gap-2 mb-8 border-b border-border pb-1">
+          <div className="flex gap-2 mb-8 border-b border-border pb-1 overflow-x-auto">
             {[
               { id: "orders" as const, label: "Мои заказы", icon: "Package" },
               { id: "loyalty" as const, label: "Программа лояльности", icon: "Star" },
               { id: "settings" as const, label: "Настройки", icon: "Settings" },
             ].map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setActiveTab(t.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-t-xl text-sm font-medium transition-colors ${
-                  activeTab === t.id
-                    ? "bg-primary text-white"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                <Icon name={t.icon as "Package"} size={16} />
-                {t.label}
+              <button key={t.id} onClick={() => setActiveTab(t.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-t-xl text-sm font-medium transition-colors whitespace-nowrap ${
+                  activeTab === t.id ? "bg-primary text-white" : "text-muted-foreground hover:text-foreground"}`}>
+                <Icon name={t.icon as "Package"} size={16} />{t.label}
               </button>
             ))}
           </div>
@@ -106,30 +173,34 @@ export default function Account() {
           {activeTab === "orders" && (
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-foreground">История заказов</h2>
-              {mockUser.orders.map((order) => (
-                <div key={order.id} className="bg-card border border-border rounded-2xl p-5">
-                  <div className="flex items-start justify-between flex-wrap gap-3">
-                    <div>
-                      <p className="font-semibold text-foreground">{order.device}</p>
-                      <p className="text-sm text-muted-foreground mt-0.5">{order.service}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        <Icon name="Calendar" size={12} className="inline mr-1" />
-                        {order.date} · #{order.id}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-bold text-foreground">{order.price.toLocaleString()} ₽</p>
-                      <span className={`text-xs px-2.5 py-1 rounded-full font-medium mt-1 inline-block ${
-                        order.status === "Готово"
-                          ? "bg-green-100 text-green-700"
-                          : "bg-primary/10 text-primary"
-                      }`}>
-                        {order.status}
-                      </span>
+              {orders.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                  <Icon name="Package" size={48} className="mx-auto mb-3 opacity-40" />
+                  <p>Заказов пока нет</p>
+                </div>
+              ) : (
+                orders.map((order) => (
+                  <div key={order.id} className="bg-card border border-border rounded-2xl p-5">
+                    <div className="flex items-start justify-between flex-wrap gap-3">
+                      <div>
+                        <p className="font-semibold text-foreground">{order.device}</p>
+                        <p className="text-sm text-muted-foreground mt-0.5">{order.service}</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          <Icon name="Calendar" size={12} className="inline mr-1" />
+                          {order.createdAt?.slice(0, 10)} · #{order.orderNumber}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-bold text-foreground">{order.price.toLocaleString()} ₽</p>
+                        <span className={`text-xs px-2.5 py-1 rounded-full font-medium mt-1 inline-block ${
+                          order.status === "ready" ? "bg-green-100 text-green-700" : "bg-primary/10 text-primary"}`}>
+                          {order.status}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           )}
 
@@ -139,52 +210,49 @@ export default function Account() {
                 <div className="flex justify-between items-start mb-4">
                   <div>
                     <p className="text-white/70 text-sm">Ваш уровень</p>
-                    <p className="text-2xl font-bold">{mockUser.level}</p>
+                    <p className="text-2xl font-bold">{loyalty.level.label}</p>
+                    <p className="text-white/60 text-sm">Скидка {loyalty.level.discount}%</p>
                   </div>
                   <div className="text-right">
                     <p className="text-white/70 text-sm">Бонусных баллов</p>
-                    <p className="text-3xl font-bold">{mockUser.bonusPoints.toLocaleString()}</p>
+                    <p className="text-3xl font-bold">{loyalty.points.toLocaleString()}</p>
                   </div>
                 </div>
-                <div className="mt-4">
-                  <div className="flex justify-between text-xs text-white/70 mb-1.5">
-                    <span>До уровня «{mockUser.nextLevel}»</span>
-                    <span>{mockUser.bonusPoints} / {mockUser.nextLevelPoints} баллов</span>
+                {loyalty.nextLevel && (
+                  <div className="mt-4">
+                    <div className="flex justify-between text-xs text-white/70 mb-1.5">
+                      <span>До уровня «{loyalty.nextLevel.label}»</span>
+                      <span>{loyalty.points} / {loyalty.nextLevel.minPoints} баллов</span>
+                    </div>
+                    <div className="h-2 bg-white/20 rounded-full overflow-hidden">
+                      <div className="h-full bg-white rounded-full" style={{ width: `${loyalty.progress}%` }} />
+                    </div>
                   </div>
-                  <div className="h-2 bg-white/20 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-white rounded-full transition-all"
-                      style={{ width: `${progress}%` }}
-                    />
-                  </div>
-                </div>
+                )}
               </div>
 
               <div className="bg-card border border-border rounded-2xl p-6">
                 <h3 className="font-semibold text-foreground mb-4">Уровни программы</h3>
                 <div className="space-y-3">
-                  {loyaltyLevels.map((level) => (
+                  {loyalty.allLevels.map((level) => (
                     <div key={level.name} className={`flex items-center justify-between p-3.5 rounded-xl ${
-                      level.name === mockUser.level ? "bg-primary/10 border-2 border-primary" : "bg-secondary"
-                    }`}>
+                      level.name === loyalty.level.name ? "bg-primary/10 border-2 border-primary" : "bg-secondary"}`}>
                       <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full ${level.color} flex items-center justify-center`}>
+                        <div className={`w-8 h-8 rounded-full ${loyaltyLevelColors[level.name] || "bg-gray-400"} flex items-center justify-center`}>
                           <Icon name="Star" size={14} className="text-white" />
                         </div>
                         <div>
-                          <p className="text-sm font-semibold text-foreground">{level.name}</p>
-                          <p className="text-xs text-muted-foreground">от {level.points.toLocaleString()} баллов</p>
+                          <p className="text-sm font-semibold text-foreground">{level.label}</p>
+                          <p className="text-xs text-muted-foreground">от {level.minPoints.toLocaleString()} баллов</p>
                         </div>
                       </div>
-                      <span className={`text-sm font-bold ${level.name === mockUser.level ? "text-primary" : "text-foreground"}`}>
+                      <span className={`text-sm font-bold ${level.name === loyalty.level.name ? "text-primary" : "text-foreground"}`}>
                         -{level.discount}%
                       </span>
                     </div>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground mt-4">
-                  1 балл = 1 рубль. За каждые 100 ₽ ремонта начисляется 5 баллов.
-                </p>
+                <p className="text-xs text-muted-foreground mt-4">1 балл = 1 рубль. За каждые 100 ₽ ремонта начисляется 5 баллов.</p>
               </div>
             </div>
           )}
@@ -194,30 +262,22 @@ export default function Account() {
               <h2 className="text-xl font-bold text-foreground">Настройки профиля</h2>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Имя</label>
-                <input
-                  type="text"
-                  defaultValue={mockUser.name}
-                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                />
+                <input type="text" value={settingsName} onChange={(e) => setSettingsName(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Email</label>
-                <input
-                  type="email"
-                  defaultValue={mockUser.email}
-                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                />
+                <input type="email" value={user.email} disabled
+                  className="w-full px-4 py-3 rounded-xl border border-input bg-muted text-muted-foreground cursor-not-allowed" />
               </div>
               <div>
                 <label className="block text-sm font-medium text-foreground mb-1.5">Телефон</label>
-                <input
-                  type="tel"
-                  defaultValue={mockUser.phone}
-                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                />
+                <input type="tel" value={settingsPhone} onChange={(e) => setSettingsPhone(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
               </div>
-              <button className="w-full py-3 rounded-xl bg-primary text-white font-medium hover:bg-primary/90 transition-colors">
-                Сохранить изменения
+              <button onClick={handleSaveProfile}
+                className="w-full py-3 rounded-xl bg-primary text-white font-medium hover:bg-primary/90 transition-colors">
+                {settingsSaved ? "Сохранено!" : "Сохранить изменения"}
               </button>
             </div>
           )}
@@ -238,20 +298,12 @@ export default function Account() {
       <section className="py-14 container mx-auto px-4 flex-1">
         <div className="max-w-md mx-auto">
           <div className="flex bg-secondary rounded-2xl p-1 mb-8">
-            <button
-              onClick={() => { setTab("login"); setEmailSent(false); }}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                tab === "login" ? "bg-primary text-white shadow-sm" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <button onClick={() => { setTab("login"); setEmailSent(false); setError(""); }}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === "login" ? "bg-primary text-white shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
               Войти
             </button>
-            <button
-              onClick={() => { setTab("register"); setEmailSent(false); }}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                tab === "register" ? "bg-primary text-white shadow-sm" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
+            <button onClick={() => { setTab("register"); setEmailSent(false); setError(""); }}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all ${tab === "register" ? "bg-primary text-white shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
               Регистрация
             </button>
           </div>
@@ -261,38 +313,21 @@ export default function Account() {
               <form onSubmit={handleLogin} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Email</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    placeholder="your@email.com"
-                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="your@email.com"
+                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Пароль</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    placeholder="••••••••"
-                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••"
+                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
-                <button
-                  type="submit"
-                  className="w-full py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors"
-                >
+                {error && <p className="text-sm text-destructive flex items-center gap-1.5"><Icon name="AlertCircle" size={14} />{error}</p>}
+                <button type="submit" disabled={formLoading}
+                  className="w-full py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2">
+                  {formLoading && <Icon name="Loader2" size={16} className="animate-spin" />}
                   Войти
                 </button>
               </form>
-              <div className="mt-4 text-center">
-                <button className="text-sm text-primary hover:underline">
-                  Забыли пароль?
-                </button>
-              </div>
             </div>
           )}
 
@@ -301,51 +336,28 @@ export default function Account() {
               <form onSubmit={handleRegister} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Ваше имя</label>
-                  <input
-                    type="text"
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    required
-                    placeholder="Иван Петров"
-                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <input type="text" value={regName} onChange={(e) => setRegName(e.target.value)} required placeholder="Иван Петров"
+                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Email</label>
-                  <input
-                    type="email"
-                    value={regEmail}
-                    onChange={(e) => setRegEmail(e.target.value)}
-                    required
-                    placeholder="your@email.com"
-                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <input type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} required placeholder="your@email.com"
+                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Телефон</label>
-                  <input
-                    type="tel"
-                    value={regPhone}
-                    onChange={(e) => setRegPhone(e.target.value)}
-                    placeholder="+7 (999) 000-00-00"
-                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <input type="tel" value={regPhone} onChange={(e) => setRegPhone(e.target.value)} placeholder="+7 (999) 000-00-00"
+                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Пароль</label>
-                  <input
-                    type="password"
-                    value={regPassword}
-                    onChange={(e) => setRegPassword(e.target.value)}
-                    required
-                    placeholder="Минимум 8 символов"
-                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <input type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} required placeholder="Минимум 6 символов"
+                    className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring" />
                 </div>
-                <button
-                  type="submit"
-                  className="w-full py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors"
-                >
+                {error && <p className="text-sm text-destructive flex items-center gap-1.5"><Icon name="AlertCircle" size={14} />{error}</p>}
+                <button type="submit" disabled={formLoading}
+                  className="w-full py-3 rounded-xl bg-primary text-white font-semibold hover:bg-primary/90 transition-colors disabled:opacity-60 flex items-center justify-center gap-2">
+                  {formLoading && <Icon name="Loader2" size={16} className="animate-spin" />}
                   Зарегистрироваться
                 </button>
               </form>
@@ -359,13 +371,9 @@ export default function Account() {
               </div>
               <h2 className="text-xl font-bold text-foreground mb-2">Подтвердите email</h2>
               <p className="text-muted-foreground text-sm">
-                Мы отправили письмо на <strong>{regEmail}</strong>.
-                Перейдите по ссылке в письме для завершения регистрации.
+                Мы отправили письмо на <strong>{regEmail}</strong>. Перейдите по ссылке для завершения регистрации.
               </p>
-              <button
-                onClick={() => setEmailSent(false)}
-                className="mt-6 text-sm text-primary hover:underline"
-              >
+              <button onClick={() => setEmailSent(false)} className="mt-6 text-sm text-primary hover:underline">
                 Отправить повторно
               </button>
             </div>

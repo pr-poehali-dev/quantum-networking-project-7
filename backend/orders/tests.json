@@ -1,0 +1,18 @@
+{
+  "tests": [
+    {
+      "name": "Search order by number - not found",
+      "method": "GET",
+      "path": "/?action=search&number=SC-9999-999",
+      "expectedStatus": 404,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Get orders without auth",
+      "method": "GET",
+      "path": "/?action=list",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    }
+  ]
+}

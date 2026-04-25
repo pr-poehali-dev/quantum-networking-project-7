@@ -1,5 +1,6 @@
 import { useState } from "react";
 import Icon from "@/components/ui/icon";
+import { apiSearchOrder } from "@/lib/api";
 
 type StatusStep = {
   id: string;
@@ -47,13 +48,23 @@ const mockOrders: Record<string, { device: string; model: string; status: string
   },
 };
 
+type OrderData = {
+  device: string;
+  status: string;
+  master: string;
+  comment: string;
+  createdAt: string;
+  updatedAt: string;
+  orderNumber: string;
+};
+
 export default function OrderStatus() {
   const [orderNumber, setOrderNumber] = useState("");
-  const [order, setOrder] = useState<(typeof mockOrders)[string] | null>(null);
+  const [order, setOrder] = useState<OrderData | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleSearch = () => {
+  const handleSearch = async () => {
     setError("");
     setOrder(null);
     if (!orderNumber.trim()) {
@@ -61,15 +72,19 @@ export default function OrderStatus() {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      const found = mockOrders[orderNumber.trim().toUpperCase()];
-      if (found) {
-        setOrder(found);
-      } else {
+    try {
+      const data = await apiSearchOrder(orderNumber.trim());
+      setOrder(data.order);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("не найден") || msg === "") {
         setError("Заказ не найден. Проверьте номер и попробуйте ещё раз.");
+      } else {
+        setError(msg);
       }
+    } finally {
       setLoading(false);
-    }, 800);
+    }
   };
 
   const currentStepIndex = order ? statusSteps.findIndex((s) => s.id === order.status) : -1;
@@ -122,7 +137,6 @@ export default function OrderStatus() {
           )}
           <p className="mt-3 text-xs text-muted-foreground">
             Номер заказа указан в квитанции, которую вы получили при сдаче устройства.
-            Для теста попробуйте: SC-2024-001
           </p>
         </div>
 
@@ -149,11 +163,11 @@ export default function OrderStatus() {
                 </div>
                 <div>
                   <p className="text-muted-foreground">Принят</p>
-                  <p className="font-medium text-foreground">{order.created}</p>
+                  <p className="font-medium text-foreground">{order.createdAt?.slice(0, 10)}</p>
                 </div>
                 <div className="col-span-2">
                   <p className="text-muted-foreground">Обновлено</p>
-                  <p className="font-medium text-foreground">{order.updated}</p>
+                  <p className="font-medium text-foreground">{order.updatedAt?.slice(0, 16).replace("T", " ")}</p>
                 </div>
               </div>
               {order.comment && (
